@@ -152,6 +152,8 @@ inline void ParseTopKParam(const TShape& src_shape, const TopKParam& param, TSha
                                       << *element_num << ", get k = " << *k;
 }
 
+template<class Type> struct S;
+
 /*!
    * \brief Implementation of the TopK operation
    *
@@ -217,34 +219,50 @@ void TopKImpl(RunContext ctx,
   mxnet_op::Kernel<range_fwd, xpu>::Launch(s, batch_size * element_num, 1, 0, 1,
     kWriteTo, indices.dptr_);
 
-  CHECK_EQ(sorted_dat.CheckContiguous(), true);
-  CHECK_EQ(indices.CheckContiguous(), true);
-  if (param.ret_typ == topk_enum::kReturnMask) {
-    sel_indices = Tensor<xpu, 1, int>(reinterpret_cast<int*>(workspace_curr_ptr),
-                                      Shape1(batch_size * k), s);
-    workspace_curr_ptr += sizeof(int) * batch_size * k;
-    mask_val = Tensor<xpu, 2, real_t>(reinterpret_cast<real_t*>(workspace_curr_ptr),
-                                      Shape2(batch_size * k, 1), s);
-    workspace_curr_ptr += sizeof(real_t) * batch_size * k;
-    mask_val = scalar<real_t>(1);
-    CHECK_EQ(sel_indices.CheckContiguous(), true);
-    CHECK_EQ(mask_val.CheckContiguous(), true);
-  }
-  temp_workspace = Tensor<xpu, 1, char>(workspace_curr_ptr, Shape1(temp_size), s);  // temp space
-  workspace_curr_ptr += temp_size;
-  // 2. Perform inplace batch sort using the `SortByKey` in MShadow
-  // After sorting, each batch in `sorted_dat` will be sorted in the corresponding order
-  //   and the `indices` will contain the corresponding index in `sorted_dat`
-  // Sort the data and keep record of the correspondence to global indices.
-  mxnet::op::SortByKey(sorted_dat, indices, is_ascend, &temp_workspace);
-  // Calculate the corresponding batch indices of the elements
-  batch_id = indices / element_num;
-  // Since the SortByKey performs stable sort, the second SortByKey will reorder
-  //   the sorted_dat based on the order of the batch_id
-  mxnet::op::SortByKey(batch_id, sorted_dat, true, &temp_workspace);
-  // Reorder the indices
-  batch_id = indices / element_num;
-  mxnet::op::SortByKey(batch_id, indices, true, &temp_workspace);
+  // indices now contains the indices into src
+
+  //for (unsigned int i = 0; i < src.Size(); i++) {
+  //    std::cout << indices[i] << " ";
+  //}
+  //std::cout << std::endl;
+  //
+  auto bla = dat[0][0][0];
+  S<decltype(bla)>();
+  //mshadow::Tensor<mshadow::cpu, 2, float>
+
+  real_t* src_dptr = src.dptr<real_t>();
+  //std::nth_element(indices.begin(), indices.begin()+3, indices.end(), [dat](int i, int j) {return dat[i] < dat[j];});
+  //std::nth_element(&indices[0], &indices[3], &indices[src.Size()]);
+  std::nth_element(&indices[0], &indices[3], &indices[src.Size()], [src_dptr](int i, int j) -> bool {return src_dptr[i] < src_dptr[j];});
+
+//  CHECK_EQ(sorted_dat.CheckContiguous(), true);
+//  CHECK_EQ(indices.CheckContiguous(), true);
+//  if (param.ret_typ == topk_enum::kReturnMask) {
+//    sel_indices = Tensor<xpu, 1, int>(reinterpret_cast<int*>(workspace_curr_ptr),
+//                                      Shape1(batch_size * k), s);
+//    workspace_curr_ptr += sizeof(int) * batch_size * k;
+//    mask_val = Tensor<xpu, 2, real_t>(reinterpret_cast<real_t*>(workspace_curr_ptr),
+//                                      Shape2(batch_size * k, 1), s);
+//    workspace_curr_ptr += sizeof(real_t) * batch_size * k;
+//    mask_val = scalar<real_t>(1);
+//    CHECK_EQ(sel_indices.CheckContiguous(), true);
+//    CHECK_EQ(mask_val.CheckContiguous(), true);
+//  }
+//  temp_workspace = Tensor<xpu, 1, char>(workspace_curr_ptr, Shape1(temp_size), s);  // temp space
+//  workspace_curr_ptr += temp_size;
+//  // 2. Perform inplace batch sort using the `SortByKey` in MShadow
+//  // After sorting, each batch in `sorted_dat` will be sorted in the corresponding order
+//  //   and the `indices` will contain the corresponding index in `sorted_dat`
+//  // Sort the data and keep record of the correspondence to global indices.
+//  mxnet::op::SortByKey(sorted_dat, indices, is_ascend, &temp_workspace);
+//  // Calculate the corresponding batch indices of the elements
+//  batch_id = indices / element_num;
+//  // Since the SortByKey performs stable sort, the second SortByKey will reorder
+//  //   the sorted_dat based on the order of the batch_id
+//  mxnet::op::SortByKey(batch_id, sorted_dat, true, &temp_workspace);
+//  // Reorder the indices
+//  batch_id = indices / element_num;
+//  mxnet::op::SortByKey(batch_id, indices, true, &temp_workspace);
 
   // 3. Assign results to the ret blob
   if (param.ret_typ == topk_enum::kReturnMask) {
@@ -264,22 +282,28 @@ void TopKImpl(RunContext ctx,
     }
     IndexFill(ret_mask, sel_indices, mask_val);
   } else if (param.ret_typ == topk_enum::kReturnIndices) {
-    indices -= batch_id * element_num;
-    if (do_transpose) {
-      Tensor<xpu, 3, real_t> ret_indices = ret[0].FlatTo3D<xpu, real_t>(axis, axis, s);
-      ret_indices = tcast<real_t>(transpose(
-                      slice<2>(inplace_reshape(indices,
-                                               Shape3(ret_indices.shape_[0],
-                                                      ret_indices.shape_[2],
-                                                      element_num)),
-                               0, k),
-                      Shape3(0, 2, 1)));
-    } else {
-      Tensor<xpu, 2, real_t> ret_indices =
+    //indices -= batch_id * element_num;
+    //if (do_transpose) {
+    //  Tensor<xpu, 3, real_t> ret_indices = ret[0].FlatTo3D<xpu, real_t>(axis, axis, s);
+    //  ret_indices = tcast<real_t>(transpose(
+    //                  slice<2>(inplace_reshape(indices,
+    //                                           Shape3(ret_indices.shape_[0],
+    //                                                  ret_indices.shape_[2],
+    //                                                  element_num)),
+    //                           0, k),
+    //                  Shape3(0, 2, 1)));
+    //} else {
+    //  Tensor<xpu, 2, real_t> ret_indices =
+    //    ret[0].get_with_shape<xpu, 2, real_t>(Shape2(batch_size, k), s);
+    //  ret_indices = tcast<real_t>(slice<1>(
+    //                  inplace_reshape(indices, Shape2(batch_size, element_num)), 0, k));
+    //}
+    //std::cout << "yay" << std::endl;
+    Tensor<xpu, 2, real_t> ret_indices =
         ret[0].get_with_shape<xpu, 2, real_t>(Shape2(batch_size, k), s);
       ret_indices = tcast<real_t>(slice<1>(
                       inplace_reshape(indices, Shape2(batch_size, element_num)), 0, k));
-    }
+
   } else {
     indices -= batch_id * element_num;
     if (do_transpose) {
